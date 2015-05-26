@@ -9,10 +9,11 @@ DIY regularity rally computer project
 - buttons should be separate for start and stop, and for checkpoint (probably need a dedicated mode button)
 
 ### Optional goals
-- (optional) enter stage target time and average speed (get notifications about finish time with buzzer, e.g. 10,5,4,3,2,1 secs out)
-- (optional) trackday mode, for timing laps
-- (optional) replay mode, for repeat/double regularity stages
-- (optional) possibility to restart arduino without losing chrono time (RTC chrono + EEPROM / SD card storage?)
+- enter stage target time and average speed (get notifications about finish time with buzzer, e.g. 10,5,4,3,2,1 secs out)
+- trackday mode, for timing laps
+- replay mode, for repeat/double regularity stages
+- possibility to restart arduino without losing chrono time (RTC chrono + EEPROM / SD card storage?)
+- possibility to adjust the distance covered during a stage (e.g. if a mistake has been made and arriving at a checkpoint, the distance covered needs to be reduced to match rally legend).
 
 ## Basic hardware
 - Arduino (code is for UNO, but should be possible to adapt to any Arduino)
