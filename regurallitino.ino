@@ -1,50 +1,112 @@
 /*
-Rally computer
+# Regurallitino
+DIY regularity rally computer project
 
-Main goals:
-- basic chronometer to time stage and checkpoint times
-- wheelspeed sensing from ABS sensor for speedometer, distance travelled and live average speed calculation in stage/between checkpoints
+## Main goals of project
+- basic chronometer to time stage and checkpoint (marker) times
+- wheelspeed sensing from ABS sensor for speedometer, distance travelled and live average speed calculation in stage/between checkpoints (markers/landmarks)
 - speedometer calibration mode by measuring given distance and entering wheelspeed signal count for a given distance (1km?)
-- acceleration measuring mode (0-100kph)
-- buttons should be separate for start and stop, and for checkpoint (probably need a dedicated mode button)
+- performance measuring mode (0-100kph acceleration, deceleration 100km-0 etc.)
+- buttons should be separate for start and stop, and for checkpoint- marker (probably need a dedicated mode button)
 
+### Optional goals
 - (optional) enter stage target time and average speed (get notifications about finish time with buzzer, e.g. 10,5,4,3,2,1 secs out)
 - (optional) trackday mode, for timing laps
 - (optional) replay mode, for repeat/double regularity stages
-- (optional) possibility to restart arduino without losing chrono time (RTC chrono + EEPROM?)
+- (optional) possibility to restart arduino without losing chrono time (RTC chrono + EEPROM / SD card storage?)
+
+## Basic hardware
+- Arduino (code is for UNO, but should be possible to adapt to any Arduino)
+- Nokia 5110 LCD display
+- a few pushbuttons for start, checkpoint, stop and mode switching
+- (optional) DS3231 RTC module (for RTC precision mode)
+- (optional) LED's for visual notifications
+- (optional) piezo speaker for audible notifications
+
 
 when chrono starts start measuring wheel signals. after X millis, adjust speedometer and recalculate average and odometer. do the same for checkpoint specific averages and timers.
 wheelspeed should use interrupts and volatile types 
 
 */
+
 #define USE_RTC_CHRONO false
 #define USE_SERIAL true
+
 
 #include <Wire.h>
 #include <Time.h>
 #include <DS3232RTC.h>
 
-tmElements_t tm;
-char buffer[21];
 
-bool buttonState;
-bool previousButtonState;
-bool dirtyState;
-int buttonDebounceCounter;
+tmElements_t tm; //Time component struct variable
+char buffer[21]; //Buffer for number to string conversions
+int i; //Generic iterator
 
-
-bool chronoStarted;
-
+//Timing variables for different execution cycles
 unsigned long time;
 unsigned long last100msUpdate;
 unsigned long last1000msUpdate;
 
+enum actionEnum {
+  none,
+  
+  startChrono,
+  setLandmark,
+  stopChrono,
+  
+  switchMode,
+  
+  startTeethCount,
+  stopTeethCount,
+  
+  incrementTeethCount,
+  decrementTeethCount,
+  saveTeethCount,
+  
+  startLaptimer,
+  setSector,
+  stopLaptimer,
+  
+  startPerformanceTest,
+  stopPerformanceTest,
+  
+  startReplay,
+  stopReplay
+};
+
+enum modeEnum {
+  info, //show RTC date, time, temperature & TPKM settings and other relevant config info
+  
+  chrono, //display simple chronometer (do not show average speed or distance, but keep measuring it in background)
+  stage, //display chronometer, distance covered and average speed in stage and since last landmark. Also show current speed (within last 1000ms)
+  speedo, //display speedometer
+
+  teethCount, //measure Teeth in driven distance - to calculate value to enter in enterTPKM mode
+  enterTPKM, //enter teeth per km used for distance and speed calculation (save in EEPROM)
+  
+  trackday, //measure laptimes, compare to previous laps, show best laptime and so on //TRACK DAY, BRO! 5 sets of tyres, bro. Yokohama, bro. Supa toyo, bro. Nitto... Hoosiers. Hoosherrs. Got some Hooshers for the track day, bro! Bro, you coming bro?! <c>RCR
+  
+  performance, //measure acceleration and deceleration times
+  
+  replay  //mode where a previous stage is replayed in real time and compared to current stage distance and speed data
+};
+
+actionEnum action = none;
+modeEnum mode = info;
+
+bool chronoStarted;
 unsigned long milliStart;
 unsigned long milliStop;
 unsigned long milliChrono;
 
-#if USE_RTC_CHRONO
 
+volatile unsigned long wheelTeeth;
+unsigned long wheelTeethPrevSecond;
+unsigned long teethPerKM = 24705;
+float avgSpeed = 0;
+float distance = 0;
+
+#if USE_RTC_CHRONO
 unsigned long rtcEpochStart;
 unsigned long rtcEpochStop;
 unsigned long rtcNow;
@@ -55,30 +117,47 @@ unsigned long rtcChrono;
 
 bool rtcStartSecond;
 bool rtcStopSecond;
-
 #endif
 
-volatile unsigned long wheelteeth;
-unsigned long wheelteeth1k;
-unsigned long wheelStop;
-unsigned long teethPerKM = 24705;
-float avgSpeed = 0;
+
 
 //
 //FOR SCREEN
 //
-#define PIN_RESET 12 //Pin 4 on LCD
-#define PIN_SCE   11 //Pin 3 on LCD
-#define PIN_DC    10 //Pin 5 on LCD
-#define PIN_SDIN  9 //Pin 6 on LCD
-#define PIN_SCLK  8 //Pin 7 on LCD
-#define PIN_BACKLIGHT 6
-#define PIN_BUTTON 2
-#define PIN_LED  5
-#define PIN_BUTTON_MODE 4
+#define PIN_RESET 12 //Pin 1 on LCD
+#define PIN_SCE   11 //Pin 2 on LCD
+#define PIN_DC    10 //Pin 3 on LCD
+#define PIN_SDIN  9 //Pin 4 on LCD
+#define PIN_SCLK  8 //Pin 5 on LCD
+
+
+//#define PIN_LED  5
+//#define LED_LEVEL 200
+
+#define PIN_BTN_START 4
+#define PIN_BTN_LANDMARK 5
+#define PIN_BTN_STOP 6
+#define PIN_BTN_MODE 7
+
+#define BTN_COUNT 4
+
+static const byte debounceButtons[BTN_COUNT] = {
+  PIN_BTN_START, PIN_BTN_LANDMARK, PIN_BTN_STOP, PIN_BTN_MODE
+};
+
+#define BTN_START_IDX 0
+#define BTN_LANDMARK_IDX 1
+#define BTN_STOP_IDX 2
+#define BTN_MODE_IDX 3
+
+bool buttonState[BTN_COUNT];
+bool previousButtonState[BTN_COUNT];
+//bool dirtyButtonState[BTN_COUNT];
+bool dirtyButtonState;
+byte buttonDebounceCounter[BTN_COUNT] = {0,0,0,0};
 
 #define DEBOUNCE 10
-#define LED_LEVEL 200
+
 
 #define MILLIS_IN_HOUR 3600000UL
 #define MILLIS_IN_MINUTE 60000UL
@@ -192,12 +271,6 @@ static const byte ASCII[][5] = {
   ,{0x10, 0x08, 0x08, 0x10, 0x08} // 7e ~
   ,{0x78, 0x46, 0x41, 0x46, 0x78} // 7f DEL
 };
-//
-//
-//
-
-
-
 
 
 
@@ -205,17 +278,15 @@ void setup() {
   LCDInit();
   LCDClear();
   
-  pinMode(PIN_BACKLIGHT, OUTPUT);
-  analogWrite(PIN_BACKLIGHT, 70);
-  pinMode(PIN_LED, OUTPUT);
-  analogWrite(PIN_LED, 0);
+  //pinMode(PIN_LED, OUTPUT);
+  //analogWrite(PIN_LED, 0);
   
-  pinMode(PIN_BUTTON, INPUT_PULLUP);
-  pinMode(PIN_BUTTON_MODE, INPUT_PULLUP);
+  for(i = 0; i < (sizeof(debounceButtons)/sizeof(byte)); i++) {
+    pinMode(debounceButtons[i], INPUT_PULLUP);
+    buttonState[i] = digitalRead(debounceButtons[i]);
+    previousButtonState[i] = buttonState[i];
+  }
   
-  buttonState = digitalRead(PIN_BUTTON);
-  previousButtonState = buttonState;
-  dirtyState = buttonState;
   
   chronoStarted = false;
   milliStart = 0;
@@ -236,7 +307,8 @@ void setup() {
   Serial.begin(9600);  
 #endif
 
-  wheelteeth = 0;
+  wheelTeeth = 0;
+  wheelTeethPrevSecond = 0;
 
 }
 
@@ -244,61 +316,64 @@ void loop() {
   if(millis() != time)
   {
     time = millis();
-    //
-    // EVERY MILLI
-    //
-    //Serial.println(analogRead(A5));
+    action = none;
     
-    //SOFTWARE DEBOUNCE FOR BUTTON
-    dirtyState = digitalRead(PIN_BUTTON);
-    if(dirtyState == buttonState && buttonDebounceCounter > 0) { 
-      buttonDebounceCounter--;
-    }
-    if(dirtyState != buttonState) {
-      buttonDebounceCounter++;
-    }
-    if(buttonDebounceCounter >= DEBOUNCE)
-    {
-      buttonDebounceCounter = 0;
-      buttonState = dirtyState;
-    }
-    
-    //
-    if(buttonState != previousButtonState) {
-      previousButtonState = buttonState;
-      if(!buttonState){
-        analogWrite(PIN_LED, LED_LEVEL);
-#if USE_SERIAL
-        Serial.print("MODE:");
-        Serial.println(digitalRead(PIN_BUTTON_MODE));
-#endif
-        //gotoXY(0,4);
-        //LCDString("BTN");
-        
-      } else {
-        analogWrite(PIN_LED, LOW);
-        //gotoXY(0,4);
-        //LCDString("   ");
-        
-        //setTime(1, 6, 0, 26, 5, 2015);//setting AVR time
-        //RTC.set(now());
+    for(i = 0; i < (sizeof(debounceButtons)/sizeof(byte)); i++) {
+      dirtyButtonState = digitalRead(debounceButtons[i]);
+      
+      if(dirtyButtonState == buttonState[i] && buttonDebounceCounter[i] > 0) { 
+        buttonDebounceCounter[i]--;
+      }
+      if(dirtyButtonState != buttonState[i]) {
+        buttonDebounceCounter[i]++;
+      }
+      if(buttonDebounceCounter[i] >= DEBOUNCE)
+      {
+        buttonDebounceCounter[i] = 0;
+        previousButtonState[i] = buttonState[i];
+        buttonState[i] = dirtyButtonState;
       }
       
-      if(!chronoStarted && buttonState == HIGH) { //chrono has not been started before, but button was pressed and now is released - start chrono
+      if(buttonState[i] != previousButtonState[i]) { //some button has been pressed
+        if(mode == chrono || mode == stage || mode == speedo) {
+          if(!chronoStarted && i == BTN_START_IDX && buttonState[BTN_START_IDX] == HIGH) { //
+            action = startChrono;
+          }
+          if(i == BTN_STOP_IDX && chronoStarted && buttonState[BTN_STOP_IDX] == HIGH) { //
+            action = stopChrono;
+          }
+        }
+        if(i == BTN_MODE_IDX && buttonState[BTN_MODE_IDX] == HIGH) {
+          action = switchMode;
+        }
+        
+        previousButtonState[i] = buttonState[i];
+      }
+    }
+    //
+    
+
+    //
+    switch(action) {
+    
+      case startChrono:
       
+        //setTime(1, 6, 0, 26, 5, 2015);//setting AVR time
+        //RTC.set(now());
 #if USE_RTC_CHRONO
         rtcEpochStart = RTC.get();
         rtcEpochStop = rtcEpochStart;
         rtcStartSecond = true;
 #endif
-
         chronoStarted = true;
-        milliStart = time;        
-        LCDClear();
-        wheelteeth = 0;
+        milliStart = time;
+        wheelTeeth = 0;
+        wheelTeethPrevSecond = 0;
         attachInterrupt(INT1, wheelsignal, FALLING);
-      } else if(chronoStarted && buttonState == HIGH) { //chrono was started, but now the button has been pressed
-      
+        break;
+     
+      case stopChrono:
+        
 #if USE_RTC_CHRONO
         rtcStopSecond = true;
         rtcEpochStop = RTC.get();
@@ -307,9 +382,30 @@ void loop() {
         chronoStarted = false;
         milliStop = time;
         milliChrono = (time - milliStart);
-        gotoXY(0,4);
-        LCDChrono(milliChrono);
-      }
+        break;
+      
+      case switchMode:
+        LCDClear();
+        if(chronoStarted && mode == speedo) {
+          mode = chrono;
+        } else {
+          switch(mode) {
+            case info:
+              mode = chrono;
+              break;
+            case chrono:
+              mode = stage;
+              break;
+            case stage:
+              mode = speedo;
+              break;
+            case speedo:
+              mode = info;
+              break;
+          }
+        }
+        break;
+
     }
     
 #if USE_RTC_CHRONO
@@ -349,72 +445,103 @@ void loop() {
     if(time >= last100msUpdate+99) {
       last100msUpdate = time;
       
-      gotoXY(0,0);
-      stringRTC_Time();     
-      
-      int t = RTC.temperature();
-      float celsius = t / 4.0;
-      float fahrenheit = celsius * 9.0 / 5.0 + 32.0;
-      gotoXY(0,2);
-      LCDString("t(C) ");
-      LCDString(dtostrf(celsius, 4, 1, buffer));
-      
-      
-
       if(chronoStarted) {
-        
-        gotoXY(0,4);
-        milliChrono = (unsigned long)(time - milliStart);
-        LCDChrono(milliChrono);
-        
-        avgSpeed = (float)wheelteeth / teethPerKM * 3600000 / milliChrono;
-        Serial.print(wheelteeth);
-        Serial.print("\t");
-        Serial.print(milliChrono);
-        Serial.print("\t");
-        Serial.print(teethPerKM);
-        Serial.print("\t");
-        Serial.println(avgSpeed);
+            milliChrono = (unsigned long)(time - milliStart);
+            distance = (float)wheelTeeth / teethPerKM;
+            avgSpeed = (float)distance / milliChrono * MILLIS_IN_HOUR;
+      }
+      
+      switch(mode) {
+        case info:
+        {
+          gotoXY(42,0);
+          LCDString("INFO");
+          
+          gotoXY(0,1);
+          RTC.read(tm);//TimeElements variable
+          LCDString(itoa(tmYearToCalendar(tm.Year),buffer,10));
+          LCDString(".");
+          LCD2digit(tm.Month);
+          LCDString(".");
+          LCD2digit(tm.Day);
+          gotoXY(0,2);
+          LCD2digit(tm.Hour);
+          LCDString(":");
+          LCD2digit(tm.Minute);
+          LCDString(":");
+          LCD2digit(tm.Second);
+          int t = RTC.temperature();
+          float celsius = t / 4.0;
+          float fahrenheit = celsius * 9.0 / 5.0 + 32.0;
+          gotoXY(0,3);
+          LCDString("Temp ");
+          LCDString(dtostrf(celsius, 4, 1, buffer));
+          LCDString("C");
+          gotoXY(0,4);
+          LCDString("TPKM ");
+          LCDString(itoa(teethPerKM, buffer, 10));
+          break;
+        }
+        case chrono:
+          gotoXY(42,0);
+          LCDString("Chrono");
+          break;
+        case stage: 
+        {
+          gotoXY(42,0);
+          LCDString("Stage");
 
-        gotoXY(0,3);
-        LCDString(itoa(wheelteeth,buffer,10));
-        gotoXY(42,3);
-        LCDString(dtostrf(avgSpeed, 4, 1, buffer));
+          if(chronoStarted) {
+            gotoXY(0,1);
+            LCDChrono(milliChrono);
+            gotoXY(0,2);
+            LCDString(dtostrf(distance, 4, 1, buffer));
+            LCDString("km");
+            gotoXY(42,3);
+            LCDString(dtostrf(avgSpeed, 4, 1, buffer));
+
+#if USE_SERIAL
+            Serial.print(wheelTeeth);
+            Serial.print("\t");
+            Serial.print(milliChrono);
+            Serial.print("\t");
+            Serial.print(teethPerKM);
+            Serial.print("\t");
+            Serial.println(avgSpeed);
+#endif
+          } else {
+            //LCDClear();
+          }
+          break;
+        }
+        case speedo:
+          gotoXY(42,0);
+          LCDString("Speedo");
+          break;
       }
 
     } //do only once per 100 milliseconds
+    
     if(time >= last1000msUpdate+1000) {
-      gotoXY(0,5);
-      avgSpeed = (float)(wheelteeth - wheelteeth1k) / teethPerKM * 3600000 / (time - last1000msUpdate);
-      LCDString(itoa((wheelteeth - wheelteeth1k),buffer,10));
-      gotoXY(42,5);
-      LCDString(dtostrf(avgSpeed, 4, 1, buffer));
-      wheelteeth1k = wheelteeth;
-      last1000msUpdate = time;
+      if(mode == stage || mode == speedo) {
+        gotoXY(0,5);
+        LCDString("          ");
+        gotoXY(0,5);
+        avgSpeed = (float)(wheelTeeth - wheelTeethPrevSecond) / teethPerKM * 3600000 / (time - last1000msUpdate);
+        LCDString(itoa((wheelTeeth - wheelTeethPrevSecond),buffer,10));
+        LCDString("tps");
+        gotoXY(42,5);
+        LCDString(dtostrf(avgSpeed, 4, 1, buffer));
+        wheelTeethPrevSecond = wheelTeeth;
+        last1000msUpdate = time;
+      }
     }
     
   } //do only once per millisecond
 }
 
 void wheelsignal() {
-  wheelteeth = wheelteeth+1;
-}
-
-void stringRTC_Time()
-{
-  RTC.read(tm);//TimeElements variable
-  LCD2digit(tm.Hour);
-  LCDString(":");
-  LCD2digit(tm.Minute);
-  LCDString(":");
-  LCD2digit(tm.Second);
-  gotoXY(0,1);
-  LCDString(itoa(tmYearToCalendar(tm.Year),buffer,10));
-  LCDString(".");
-  LCD2digit(tm.Month);
-  LCDString(".");
-  LCD2digit(tm.Day);
-
+  wheelTeeth = wheelTeeth+1;
 }
 
 //////
