@@ -99,12 +99,27 @@ unsigned long milliStart;
 unsigned long milliStop;
 unsigned long milliChrono;
 
+unsigned long milliStartLandmark;
+unsigned long milliChronoLandmark;
+unsigned long milliChronoLandmarkBlink;
+
 
 volatile unsigned long wheelTeeth;
+unsigned long wheelTeethLandmark;
 unsigned long wheelTeethPrevSecond;
 unsigned long teethPerKM = 24705;
+
 float avgSpeed = 0;
+float avgSpeedLandmark = 0;
+float avgSpeedLandmarkBlink = 0;
+
 float distance = 0;
+float distanceLandmark = 0;
+float distanceLandmarkBlink = 0;
+
+float currentSpeed = 0;
+int currentSpeedTeethDelta = 0;
+int currentSpeedMilliDelta = 0;
 
 #if USE_RTC_CHRONO
 unsigned long rtcEpochStart;
@@ -152,7 +167,6 @@ static const byte debounceButtons[BTN_COUNT] = {
 
 bool buttonState[BTN_COUNT];
 bool previousButtonState[BTN_COUNT];
-//bool dirtyButtonState[BTN_COUNT];
 bool dirtyButtonState;
 byte buttonDebounceCounter[BTN_COUNT] = {0,0,0,0};
 
@@ -162,6 +176,7 @@ byte buttonDebounceCounter[BTN_COUNT] = {0,0,0,0};
 #define MILLIS_IN_HOUR 3600000UL
 #define MILLIS_IN_MINUTE 60000UL
 #define MILLIS_IN_SECOND 1000
+#define SECONDS_IN_HOUR 3600UL
 
 //The DC pin tells the LCD if we are sending a command or data
 #define LCD_COMMAND 0 
@@ -272,7 +287,21 @@ static const byte ASCII[][5] = {
   ,{0x78, 0x46, 0x41, 0x46, 0x78} // 7f DEL
 };
 
+char km_10x8[] = {
+0x0F, 0x04, 0x0A, 0x00, 0x0E, 0x02, 0x0C, 0x02, 0x0C, 0x00, 
+};
 
+char kmh_10x8[] = {
+0x0F, 0x04, 0x0A, 0xF0, 0x4E, 0xC2, 0x0C, 0x02, 0x0C, 0x00, 
+};
+
+char stg_10x8[] = {
+0x0A, 0x09, 0x04, 0x01, 0x0F, 0x01, 0x06, 0x09, 0x0D, 0x04, 
+};
+
+char lm_10x8[] = {
+0x0F, 0x08, 0x08, 0x00, 0x0F, 0x02, 0x04, 0x02, 0x0F, 0x00, 
+};
 
 void setup() {
   LCDInit();
@@ -292,6 +321,8 @@ void setup() {
   milliStart = 0;
   milliStop = 0;
   milliChrono = 0;
+  milliStartLandmark = 0;
+  milliChronoLandmark = 0;
   
 #if USE_RTC_CHRONO
   rtcNow = 0;
@@ -339,6 +370,9 @@ void loop() {
           if(!chronoStarted && i == BTN_START_IDX && buttonState[BTN_START_IDX] == HIGH) { //
             action = startChrono;
           }
+          if(i == BTN_LANDMARK_IDX && chronoStarted && buttonState[BTN_LANDMARK_IDX] == HIGH) { //
+            action = setLandmark;
+          }
           if(i == BTN_STOP_IDX && chronoStarted && buttonState[BTN_STOP_IDX] == HIGH) { //
             action = stopChrono;
           }
@@ -357,7 +391,7 @@ void loop() {
     switch(action) {
     
       case startChrono:
-      
+        
         //setTime(1, 6, 0, 26, 5, 2015);//setting AVR time
         //RTC.set(now());
 #if USE_RTC_CHRONO
@@ -366,12 +400,43 @@ void loop() {
         rtcStartSecond = true;
 #endif
         chronoStarted = true;
+        
         milliStart = time;
+        milliStartLandmark = time;
+        milliChronoLandmarkBlink = 0;
+        
         wheelTeeth = 0;
+        wheelTeethLandmark = 0;
         wheelTeethPrevSecond = 0;
+        
+        avgSpeed = 0;
+        avgSpeedLandmark = 0;
+        avgSpeedLandmarkBlink = 0;
+        
+        distance = 0;
+        distanceLandmark = 0;
+        distanceLandmarkBlink = 0;
+        
         attachInterrupt(INT1, wheelsignal, FALLING);
+        
+        LCDClear();
+        
         break;
-     
+        
+      case setLandmark:
+      
+        avgSpeedLandmarkBlink = avgSpeedLandmark;
+        milliChronoLandmarkBlink = milliChronoLandmark;
+        distanceLandmarkBlink = distanceLandmark;
+        
+        milliStartLandmark = time;
+        wheelTeethLandmark = wheelTeeth;
+        avgSpeedLandmark = 0;
+        
+        LCDClear();
+        
+        break;
+        
       case stopChrono:
         
 #if USE_RTC_CHRONO
@@ -382,10 +447,14 @@ void loop() {
         chronoStarted = false;
         milliStop = time;
         milliChrono = (time - milliStart);
+        milliChronoLandmark = (time - milliStartLandmark);
+        
         break;
       
       case switchMode:
+      
         LCDClear();
+        
         if(chronoStarted && mode == speedo) {
           mode = chrono;
         } else {
@@ -404,6 +473,7 @@ void loop() {
               break;
           }
         }
+        
         break;
 
     }
@@ -447,8 +517,12 @@ void loop() {
       
       if(chronoStarted) {
             milliChrono = (unsigned long)(time - milliStart);
-            distance = (float)wheelTeeth / teethPerKM;
-            avgSpeed = (float)distance / milliChrono * MILLIS_IN_HOUR;
+            milliChronoLandmark = (unsigned long)(time - milliStartLandmark);
+            distance = (double)wheelTeeth / (double)teethPerKM;
+            distanceLandmark = (double)(wheelTeeth - wheelTeethLandmark) / (double)teethPerKM;
+            avgSpeed = (double)distance / (double)(milliChrono/1000.0) * (double)SECONDS_IN_HOUR;
+            avgSpeedLandmark = (double)distanceLandmark / (double)(milliChronoLandmark/1000.0) * (double)SECONDS_IN_HOUR;
+
       }
       
       switch(mode) {
@@ -485,56 +559,146 @@ void loop() {
         case chrono:
           gotoXY(42,0);
           LCDString("Chrono");
+          gotoXY(0,1);
+          LCDString("TOT:");
+          LCDChrono(milliChrono);
+          gotoXY(0,3);
+          LCDString("SPL:");
+          LCDChrono(milliChronoLandmark);
+          if(milliChronoLandmarkBlink) {
+            gotoXY(0,4);
+            LCDString("S-1:");
+            LCDChrono(milliChronoLandmarkBlink);
+          }
           break;
         case stage: 
         {
-          gotoXY(42,0);
-          LCDString("Stage");
-
-          if(chronoStarted) {
-            gotoXY(0,1);
-            LCDChrono(milliChrono);
-            gotoXY(0,2);
-            LCDString(dtostrf(distance, 4, 1, buffer));
-            LCDString("km");
-            gotoXY(42,3);
-            LCDString(dtostrf(avgSpeed, 4, 1, buffer));
-
-#if USE_SERIAL
-            Serial.print(wheelTeeth);
-            Serial.print("\t");
-            Serial.print(milliChrono);
-            Serial.print("\t");
-            Serial.print(teethPerKM);
-            Serial.print("\t");
-            Serial.println(avgSpeed);
-#endif
-          } else {
-            //LCDClear();
+/*
+          //gotoXY(42,0);
+          //LCDString("Stage");
+          gotoXY(0,0);
+          LCDChrono(milliChrono);
+          gotoXY(20,1);
+          LCDString("D");
+          LCDSymbol(stg_10x8);
+          LCDString(dtostrf(distance, 4, 2, buffer));
+          LCDSymbol(km_10x8);
+          gotoXY(20,2);
+          LCDString("V");
+          LCDSymbol(stg_10x8);
+          LCDString(dtostrf(avgSpeed, 4, 1, buffer));
+          LCDSymbol(kmh_10x8);
+          gotoXY(0,3);
+          LCDString("D");
+          LCDSymbol(lm_10x8);
+          LCDString(dtostrf(distanceLandmark, 4, 2, buffer));
+          LCDSymbol(km_10x8);
+          gotoXY(0,4);
+          LCDString("V");
+          LCDSymbol(lm_10x8);
+          LCDString(dtostrf(avgSpeedLandmark, 4, 1, buffer));
+          LCDSymbol(kmh_10x8);        
+          //gotoXY(0,5);
+          //LCDString(itoa((currentSpeedTeethDelta),buffer,10));
+          //LCDString("*");
+          gotoXY(40,5);
+          LCDString(dtostrf(currentSpeed, 4, 1, buffer));
+          LCDSymbol(kmh_10x8);
+*/        
+          gotoXY(0,0);
+          LCDChrono(milliChrono);
+          gotoXY(0,1);
+          if(milliChronoLandmark != milliChrono) {
+            if(milliChronoLandmark < 3000) {    
+              if((milliChronoLandmark > 700 && milliChronoLandmark < 1000) || (milliChronoLandmark > 1700 && milliChronoLandmark < 2000) || (milliChronoLandmark > 2700 && milliChronoLandmark < 3000))  {
+                LCDString("            ");
+              } else {    
+                LCDChrono(milliChronoLandmarkBlink);
+              }
+            } else {
+              LCDChrono(milliChronoLandmark);
+            }
           }
+          gotoXY(0,2);
+          LCDString("D");LCDSymbol(km_10x8);
+          gotoXY(65,2);
+          LCDString("V");LCDSymbol(kmh_10x8);
+          gotoXY(0,3);
+          LCDString(dtostrf(distance, 4, 2, buffer));
+          gotoXY(48,3);
+          LCDString(dtostrf(avgSpeed, 4, 1, buffer));
+          gotoXY(0,4);
+          if(milliChronoLandmark != milliChrono) {
+            if(milliChronoLandmark < 3000) {
+              if((milliChronoLandmark > 700 && milliChronoLandmark < 1000) || (milliChronoLandmark > 1700 && milliChronoLandmark < 2000) || (milliChronoLandmark > 2700 && milliChronoLandmark < 3000))  {
+                LCDString("            ");
+              } else {
+                LCDString(dtostrf(distanceLandmarkBlink, 4, 2, buffer));
+                gotoXY(48,4);
+                LCDString(dtostrf(avgSpeedLandmarkBlink, 4, 1, buffer));
+              }
+            } else {
+              LCDString(dtostrf(distanceLandmark, 4, 2, buffer));
+              gotoXY(48,4);
+              LCDString(dtostrf(avgSpeedLandmark, 4, 1, buffer));
+            }
+          }
+          gotoXY(48,5);
+          LCDString(dtostrf(currentSpeed, 4, 1, buffer));
+          
+#if USE_SERIAL
+          Serial.print(wheelTeeth);
+          Serial.print("\t");
+          Serial.print(milliChrono);
+          Serial.print("\t");
+          Serial.print(teethPerKM);
+          Serial.print("\t");
+          Serial.println(avgSpeed);
+#endif
           break;
         }
         case speedo:
           gotoXY(42,0);
           LCDString("Speedo");
+          gotoXY(0,1);
+          LCDString(dtostrf(currentSpeed, 4, 1, buffer));
+          LCDSymbol(kmh_10x8);
+          
+          gotoXY(0,5);
+        
+
+          
           break;
       }
 
     } //do only once per 100 milliseconds
     
     if(time >= last1000msUpdate+1000) {
-      if(mode == stage || mode == speedo) {
-        gotoXY(0,5);
-        LCDString("          ");
-        gotoXY(0,5);
-        avgSpeed = (float)(wheelTeeth - wheelTeethPrevSecond) / teethPerKM * 3600000 / (time - last1000msUpdate);
-        LCDString(itoa((wheelTeeth - wheelTeethPrevSecond),buffer,10));
-        LCDString("tps");
-        gotoXY(42,5);
-        LCDString(dtostrf(avgSpeed, 4, 1, buffer));
+      
+      currentSpeedMilliDelta =  time - last1000msUpdate;
+      last1000msUpdate = time;
+        
+      if(wheelTeeth) {
+        currentSpeedTeethDelta = wheelTeeth - wheelTeethPrevSecond;
         wheelTeethPrevSecond = wheelTeeth;
-        last1000msUpdate = time;
+      
+        currentSpeed = (double)(currentSpeedTeethDelta) / (double)teethPerKM * (double)MILLIS_IN_HOUR / (double)(currentSpeedMilliDelta);
+#if USE_SERIAL
+        Serial.print("wheelTeeth");
+        Serial.println(wheelTeeth);
+        Serial.print("wheelTeethPrevSecond");
+        Serial.println(wheelTeethPrevSecond);
+        Serial.print("last1000msUpdate");
+        Serial.println(last1000msUpdate);
+        Serial.print("time");
+        Serial.println(time);
+#endif
+      } else {
+        
+        currentSpeed = 0;
+        
       }
+      
     }
     
   } //do only once per millisecond
@@ -570,6 +734,16 @@ void LCDCharacter(char character) {
   LCDWrite(LCD_DATA, 0x00); //Blank vertical line padding
 }
 
+void LCDSymbol(char* symb) {
+  LCDWrite(LCD_DATA, 0x00); //Blank vertical line padding
+
+  for (int index = 0 ; index < 10 ; index++)
+    LCDWrite(LCD_DATA, symb[index]);
+    //0x20 is the ASCII character for Space (' '). The font table starts with this character
+
+  LCDWrite(LCD_DATA, 0x00); //Blank vertical line padding
+}
+
 //Given a string of characters, one by one is passed to the LCD
 void LCDString(char *characters) {
   while (*characters) {
@@ -594,6 +768,8 @@ void LCDChrono(unsigned long inMilli) {
   if(chronoHours) {
     LCDString(itoa(chronoHours,buffer,10));
     LCDString(":");
+  } else {
+    LCDString("");
   }
   //if(chronoMinutes) {
     LCD2digit(chronoMinutes);
