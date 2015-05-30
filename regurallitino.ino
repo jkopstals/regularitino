@@ -108,6 +108,7 @@ volatile unsigned long wheelTeeth;
 unsigned long wheelTeethLandmark;
 unsigned long wheelTeethPrevSecond;
 unsigned long teethPerKM = 24705;
+unsigned long tempTeethPerKM = 0;
 
 float avgSpeed = 0;
 float avgSpeedLandmark = 0;
@@ -120,6 +121,10 @@ float distanceLandmarkBlink = 0;
 float currentSpeed = 0;
 int currentSpeedTeethDelta = 0;
 int currentSpeedMilliDelta = 0;
+
+unsigned int zero60chrono;
+unsigned int zero100chrono;
+unsigned int zero120chrono;
 
 #if USE_RTC_CHRONO
 unsigned long rtcEpochStart;
@@ -169,6 +174,7 @@ bool buttonState[BTN_COUNT];
 bool previousButtonState[BTN_COUNT];
 bool dirtyButtonState;
 byte buttonDebounceCounter[BTN_COUNT] = {0,0,0,0};
+long buttonHeld = 0;
 
 #define DEBOUNCE 10
 
@@ -340,7 +346,7 @@ void setup() {
 
   wheelTeeth = 0;
   wheelTeethPrevSecond = 0;
-
+  tempTeethPerKM = teethPerKM;
 }
 
 void loop() {
@@ -377,11 +383,56 @@ void loop() {
             action = stopChrono;
           }
         }
+        if(mode == teethCount) {
+          if(i == BTN_START_IDX && buttonState[BTN_START_IDX] == HIGH) { //
+            action = startTeethCount;
+          }
+          if(i == BTN_STOP_IDX && buttonState[BTN_STOP_IDX] == HIGH) { //
+            action = stopTeethCount;
+          }
+        }
+        if(mode == enterTPKM) {
+          if(i == BTN_START_IDX && buttonState[BTN_START_IDX] == HIGH) { //
+            action = incrementTeethCount;
+          }
+          if(i == BTN_LANDMARK_IDX && buttonState[BTN_LANDMARK_IDX] == HIGH) { //
+            action = decrementTeethCount;
+          }
+          if(i == BTN_STOP_IDX && buttonState[BTN_STOP_IDX] == HIGH) { //
+            action = saveTeethCount;
+          }
+        }
+        if(mode == performance) {
+          if(i == BTN_START_IDX && buttonState[BTN_START_IDX] == HIGH && !chronoStarted) { //
+            action = startPerformanceTest;
+          }
+          if(i == BTN_STOP_IDX && buttonState[BTN_STOP_IDX] == HIGH && chronoStarted) { //
+            action = stopPerformanceTest;
+          }
+        }
         if(i == BTN_MODE_IDX && buttonState[BTN_MODE_IDX] == HIGH) {
           action = switchMode;
         }
         
         previousButtonState[i] = buttonState[i];
+      }
+      if(mode == enterTPKM) { //special button handling in enterTPKM -> holding the button speeds up increment/decrement
+        if(i == BTN_START_IDX && buttonState[BTN_START_IDX] == LOW) {
+          buttonHeld++;
+          if(buttonHeld > 1000 && buttonHeld%100 == 0) {
+            tempTeethPerKM = tempTeethPerKM + 10 + (buttonHeld/1000);
+          }
+        } else if(i == BTN_START_IDX && buttonState[BTN_START_IDX] == HIGH && buttonHeld > 0) {
+          buttonHeld = 0;
+        }
+        if(i == BTN_LANDMARK_IDX && buttonState[BTN_LANDMARK_IDX] == LOW) {
+          buttonHeld--;
+          if(buttonHeld < -500 && buttonHeld%100 == 0) {
+            tempTeethPerKM = tempTeethPerKM - 10 + (buttonHeld/1000);
+          }
+        } else if(i == BTN_LANDMARK_IDX && buttonState[BTN_LANDMARK_IDX] == HIGH && buttonHeld < 0) {
+          buttonHeld = 0;
+        }
       }
     }
     //
@@ -450,6 +501,62 @@ void loop() {
         milliChronoLandmark = (time - milliStartLandmark);
         
         break;
+      case startTeethCount:
+        
+        wheelTeeth = 0;
+        attachInterrupt(INT1, wheelsignal, FALLING);
+        LCDClear();
+        
+        break;
+        
+      case stopTeethCount:
+        
+        detachInterrupt(INT1);
+        
+        break;
+        
+      case incrementTeethCount:
+        
+        tempTeethPerKM++;
+        
+        break;
+      
+      case decrementTeethCount:
+        
+        tempTeethPerKM--;
+        
+        break;
+        
+      case saveTeethCount:
+        
+        teethPerKM = tempTeethPerKM;
+        //save to eeprom
+        
+        break;
+      
+      case startPerformanceTest:
+        
+        zero60chrono = 0;
+        zero100chrono = 0;
+        zero120chrono = 0;
+        
+        wheelTeeth = 0;
+        wheelTeethLandmark = 0;
+        attachInterrupt(INT1, wheelsignal, FALLING);
+        
+        LCDClear();
+        
+        break;
+      
+      case stopPerformanceTest:
+        
+        detachInterrupt(INT1);
+        chronoStarted = false;
+        milliStop = time;
+        milliChrono = (milliStop - milliStart);
+        wheelTeethLandmark = wheelTeeth;
+        
+        break;
       
       case switchMode:
       
@@ -469,6 +576,15 @@ void loop() {
               mode = speedo;
               break;
             case speedo:
+              mode = teethCount;
+              break;
+            case teethCount:
+              mode = enterTPKM;
+              break;
+            case enterTPKM:
+              mode = performance;
+              break;
+            case performance:
               mode = info;
               break;
           }
@@ -573,38 +689,6 @@ void loop() {
           break;
         case stage: 
         {
-/*
-          //gotoXY(42,0);
-          //LCDString("Stage");
-          gotoXY(0,0);
-          LCDChrono(milliChrono);
-          gotoXY(20,1);
-          LCDString("D");
-          LCDSymbol(stg_10x8);
-          LCDString(dtostrf(distance, 4, 2, buffer));
-          LCDSymbol(km_10x8);
-          gotoXY(20,2);
-          LCDString("V");
-          LCDSymbol(stg_10x8);
-          LCDString(dtostrf(avgSpeed, 4, 1, buffer));
-          LCDSymbol(kmh_10x8);
-          gotoXY(0,3);
-          LCDString("D");
-          LCDSymbol(lm_10x8);
-          LCDString(dtostrf(distanceLandmark, 4, 2, buffer));
-          LCDSymbol(km_10x8);
-          gotoXY(0,4);
-          LCDString("V");
-          LCDSymbol(lm_10x8);
-          LCDString(dtostrf(avgSpeedLandmark, 4, 1, buffer));
-          LCDSymbol(kmh_10x8);        
-          //gotoXY(0,5);
-          //LCDString(itoa((currentSpeedTeethDelta),buffer,10));
-          //LCDString("*");
-          gotoXY(40,5);
-          LCDString(dtostrf(currentSpeed, 4, 1, buffer));
-          LCDSymbol(kmh_10x8);
-*/        
           gotoXY(0,0);
           LCDChrono(milliChrono);
           gotoXY(0,1);
@@ -624,27 +708,27 @@ void loop() {
           gotoXY(65,2);
           LCDString("V");LCDSymbol(kmh_10x8);
           gotoXY(0,3);
-          LCDString(dtostrf(distance, 4, 2, buffer));
+          LCDString(dtostrf(distance, 5, 2, buffer));
           gotoXY(48,3);
-          LCDString(dtostrf(avgSpeed, 4, 1, buffer));
+          LCDString(dtostrf(avgSpeed, 5, 1, buffer));
           gotoXY(0,4);
           if(milliChronoLandmark != milliChrono) {
             if(milliChronoLandmark < 3000) {
               if((milliChronoLandmark > 700 && milliChronoLandmark < 1000) || (milliChronoLandmark > 1700 && milliChronoLandmark < 2000) || (milliChronoLandmark > 2700 && milliChronoLandmark < 3000))  {
                 LCDString("            ");
               } else {
-                LCDString(dtostrf(distanceLandmarkBlink, 4, 2, buffer));
+                LCDString(dtostrf(distanceLandmarkBlink, 5, 2, buffer));
                 gotoXY(48,4);
-                LCDString(dtostrf(avgSpeedLandmarkBlink, 4, 1, buffer));
+                LCDString(dtostrf(avgSpeedLandmarkBlink, 5, 1, buffer));
               }
             } else {
-              LCDString(dtostrf(distanceLandmark, 4, 2, buffer));
+              LCDString(dtostrf(distanceLandmark, 5, 2, buffer));
               gotoXY(48,4);
-              LCDString(dtostrf(avgSpeedLandmark, 4, 1, buffer));
+              LCDString(dtostrf(avgSpeedLandmark, 5, 1, buffer));
             }
           }
           gotoXY(48,5);
-          LCDString(dtostrf(currentSpeed, 4, 1, buffer));
+          LCDString(dtostrf(currentSpeed, 5, 1, buffer));
           
 #if USE_SERIAL
           Serial.print(wheelTeeth);
@@ -669,11 +753,82 @@ void loop() {
 
           
           break;
+        case teethCount:
+          gotoXY(0,0);
+          LCDString("ABS Counter");
+          gotoXY(0,1);
+          LCDString("Teeth: ");
+          LCDString(itoa((wheelTeeth),buffer,10));
+          gotoXY(0,3);
+          LCDString("Dist:");
+          LCDString(dtostrf((double)wheelTeeth / (double)teethPerKM, 7, 3, buffer));
+          
+          break;
+          
+        case enterTPKM:
+          gotoXY(0,0);
+          LCDString("set TPKM");
+          gotoXY(0,1);
+          LCDString("Teeth per km:");
+          gotoXY(0,2);
+          LCDString(itoa((tempTeethPerKM),buffer,10));
+          
+          break;
+          
+        case performance:
+          
+          if(wheelTeeth > wheelTeethLandmark) {
+            
+            if(chronoStarted == false) {
+              chronoStarted = true;
+              milliStart = time;
+              milliStartLandmark = time;
+            }
+            
+            currentSpeedMilliDelta =  time - milliStartLandmark;
+            milliStartLandmark = time;
+            currentSpeedTeethDelta = wheelTeeth - wheelTeethLandmark;
+            wheelTeethLandmark = wheelTeeth;
+            currentSpeed = (double)(currentSpeedTeethDelta) / (double)teethPerKM * (double)MILLIS_IN_HOUR / (double)(currentSpeedMilliDelta);
+            
+            if(chronoStarted && currentSpeed >= 60 && currentSpeed <= 300 && zero60chrono == 0) {
+              zero60chrono = milliChrono;
+            }
+            if(chronoStarted && currentSpeed >= 100 && currentSpeed <= 300 && zero100chrono == 0) {
+              zero100chrono = milliChrono;
+            }
+            if(chronoStarted && currentSpeed >= 120 && currentSpeed <= 300 && zero120chrono == 0) {
+              zero120chrono = milliChrono;
+            }
+            
+          }
+          gotoXY(0,0);
+          LCDString("Performance");
+          gotoXY(0,1);
+          LCDChrono(milliChrono);
+          gotoXY(0,2);
+          LCDString(dtostrf(currentSpeed, 4, 1, buffer));
+          LCDSymbol(kmh_10x8);
+          if(zero60chrono) {
+            gotoXY(0,3);
+            LCDString("60-"); LCDChrono(zero60chrono);
+          }
+          if(zero100chrono) {
+            gotoXY(0,4);
+            LCDString("100-"); LCDChrono(zero100chrono);
+          }
+          if(zero120chrono) {
+            gotoXY(0,5);
+            LCDString("120-"); LCDChrono(zero120chrono);
+          }
+           
+          break;
+          
       }
 
     } //do only once per 100 milliseconds
     
-    if(time >= last1000msUpdate+1000) {
+    if(mode != performance && time >= last1000msUpdate+1000) {
       
       currentSpeedMilliDelta =  time - last1000msUpdate;
       last1000msUpdate = time;
