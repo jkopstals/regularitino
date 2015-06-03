@@ -109,7 +109,7 @@ unsigned long milliChronoLandmarkBlink = 0;
 volatile unsigned long wheelTeeth = 0;
 unsigned long wheelTeethLandmark = 0;
 unsigned long wheelTeethPrevSecond = 0;
-unsigned long teethPerKM = 24705;
+unsigned long teethPerKM = 57570;
 unsigned long tempTeethPerKM = 0;
 
 float avgSpeed = 0;
@@ -672,7 +672,7 @@ void loop() {
           LCDString("C");
           gotoXY(0,4);
           LCDString("TPKM ");
-          LCDString(itoa(teethPerKM, buffer, 10));
+          LCDString(dtostrf(teethPerKM, 5, 0, buffer));
           break;
         }
         case chrono:
@@ -730,6 +730,8 @@ void loop() {
               LCDString(dtostrf(avgSpeedLandmark, 5, 1, buffer));
             }
           }
+          gotoXY(0,5);
+          LCDString(itoa(currentSpeedTeethDelta,buffer,10));
           gotoXY(48,5);
           LCDString(dtostrf(currentSpeed, 5, 1, buffer));
           
@@ -761,7 +763,7 @@ void loop() {
           LCDString("ABS Counter");
           gotoXY(0,1);
           LCDString("Teeth: ");
-          LCDString(itoa((wheelTeeth),buffer,10));
+          LCDString(dtostrf((wheelTeeth),5,0,buffer));
           gotoXY(0,3);
           LCDString("Dist:");
           LCDString(dtostrf((double)wheelTeeth / (double)teethPerKM, 7, 3, buffer));
@@ -774,7 +776,7 @@ void loop() {
           gotoXY(0,2);
           LCDString("Teeth per KM");
           gotoXY(20,3);
-          LCDString(itoa((tempTeethPerKM),buffer,10));
+          LCDString(dtostrf(tempTeethPerKM,5,0,buffer));
           
           break;
           
